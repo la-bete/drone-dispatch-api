@@ -26,10 +26,10 @@ stateDiagram-v2
 
 Rules enforced by `DroneService`:
 
-- **Loading** requires the drone to be `idle` and its battery to be at least 25%. All medication codes must exist, and their combined weight must not exceed the drone's `weightLimit` (itself capped at 500 g).
+- **Loading** requires the drone to be `idle` and its battery to be at least 25%. All medication codes must exist, and their combined weight must not exceed the drone's `weightLimit` (itself capped at 500 g). The whole load is checked before the drone's state changes, so a rejected load leaves the drone `idle`.
 - **Delivering** is only allowed from `loaded`.
 - **Delivered** is only allowed from `delivering`. The drone's medications are cleared and it moves straight on to `returning` in the same request, so `delivered` shows up in the audit log rather than as a resting state.
-- **Returned** puts the drone back to `idle`. `returned` is a request value, not a stored state.
+- **Returned** is only allowed from `returning` and puts the drone back to `idle`. `returned` is a request value, not a stored state.
 - Each transition writes a `STATE_CHANGE` row to the audit log with the `from` and `to` states.
 - An hourly cron job (`@nestjs/schedule`) writes a `BATTERY_CHECK` row with the current battery level for every drone.
 
@@ -95,7 +95,7 @@ Details:
 - `weightLimit` is 0 to 500 (grams). `batteryCapacity` is 0 to 100 (percent).
 - The `state` filter on `GET /drones` takes any drone state, plus `available`, which returns `idle` drones with at least 25% battery, that is, drones that can be loaded right now.
 - `limit` is 1 to 100 and defaults to 10; `page` starts at 1.
-- A PATCH to `/drones/:id` that includes `state` ignores `batteryCapacity`.
+- A PATCH to `/drones/:id` that includes `state` ignores `batteryCapacity`. Setting `batteryCapacity` to `0` is allowed.
 - Medication `name` allows letters, digits, `-` and `_`. `code` allows upper-case letters, digits and `_`, and is unique.
 - `GET /medications?droneId=` lists what a drone is currently carrying.
 
@@ -158,7 +158,7 @@ Unit tests cover the drone and medication services and controllers with mocked r
 
 ## Next steps
 
-- Make the load and state transitions transactional, so a failed load cannot leave a drone in `loading`.
+- Wrap the load and delivery transitions in a database transaction. Validation failures no longer change state, but a database error between the `loading` and `loaded` writes could still leave a drone in `loading`.
 - Add migrations and a Postgres configuration.
 - Expose the audit log, filtered by drone and event type.
 - Model battery use per delivery and refuse dispatch below the threshold.
