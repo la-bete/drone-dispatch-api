@@ -1,141 +1,117 @@
-# 🚁 Drone Dispatch API
+# Drone Dispatch API
 
-A robust NestJS backend service for managing a fleet of medication-delivery  
-drones. This API enables registration, loading, and dispatching of drones,  
-tracks the delivery lifecycle, manages medications, and provides comprehensive  
-audit logging of state changes and battery levels.
+A NestJS service for running a small fleet of medication-delivery drones: register drones, load them with medications, and move them through a delivery. The interesting part is the drone lifecycle. Every drone is a state machine, a drone below 25% battery cannot be loaded, a load is rejected if the medications outweigh the drone's limit, and every state change is written to an audit log alongside an hourly battery reading.
 
----
+## Tech Stack
 
-## 🔧 Project Overview
+- NestJS
+- TypeScript
+- TypeORM
+- SQLite
+- Swagger (OpenAPI)
+- Jest
 
-The Drone Dispatch API is designed to:
+## Drone lifecycle
 
-- **Register and manage** a fleet of drones for medication delivery
-- **Load drones** with medications and track delivery progress
-- **Audit all activities** including state changes and battery monitoring
-- **Provide a clean REST API** with comprehensive Swagger documentation
-- **Support delivery workflows** from loading to completion and return
+```mermaid
+stateDiagram-v2
+    [*] --> idle: POST /drones
+    idle --> loading: POST /drones/:id/load
+    loading --> loaded: medications found, weight within limit
+    loaded --> delivering: PATCH state=delivering
+    delivering --> delivered: PATCH state=delivered
+    delivered --> returning: automatic, same request
+    returning --> idle: PATCH state=returned
+```
 
----
+Rules enforced by `DroneService`:
 
-## 🚀 Features
+- **Loading** requires the drone to be `idle` and its battery to be at least 25%. All medication codes must exist, and their combined weight must not exceed the drone's `weightLimit` (itself capped at 500 g).
+- **Delivering** is only allowed from `loaded`.
+- **Delivered** is only allowed from `delivering`. The drone's medications are cleared and it moves straight on to `returning` in the same request, so `delivered` shows up in the audit log rather than as a resting state.
+- **Returned** puts the drone back to `idle`. `returned` is a request value, not a stored state.
+- Each transition writes a `STATE_CHANGE` row to the audit log with the `from` and `to` states.
+- An hourly cron job (`@nestjs/schedule`) writes a `BATTERY_CHECK` row with the current battery level for every drone.
 
-### Drone Management
+The audit log is stored in the database only; there is no endpoint for reading it yet.
 
-- **Register drones** with serial numbers, models, and specifications
-- **List and filter drones** by state, model, battery level, and availability
-- **Update drone states** through the delivery lifecycle
-- **Monitor battery levels** with automated cron-based checks
+## Running it
 
-### Delivery Workflow
-
-- **Load medications** onto drones with weight validation
-- **Initiate deliveries** with state transitions
-- **Complete deliveries** and manage return processes
-- **Track delivery status** through the entire lifecycle
-
-### Medication Management
-
-- **CRUD operations** for medication inventory
-- **Batch loading** by medication codes
-- **Weight validation** against drone capacity limits
-- **Relationship management** with drone assignments
-
-### Audit & Monitoring
-
-- **State change logging** for all drone operations
-- **Battery level audits** via automated cron jobs
-- **Comprehensive audit trail** for compliance and debugging
-- **Real-time monitoring** capabilities
-
-### API Documentation
-
-- **Interactive Swagger UI** at `/docs`
-- **OpenAPI specification** for integration at `/spec`
-- **Comprehensive endpoint documentation**
-- **Request/response examples**
-
----
-
-## 📦 Getting Started
-
-### Prerequisites
-
-- **Node.js** (v16+ recommended)
-- **npm** or **Yarn**
-- **Git** for cloning the repository
-- _(Optional)_ **Docker** for containerized deployment
-
-### Installation
+Requires Node.js 20 or later (NestJS 11) and npm.
 
 ```bash
-# Clone the repository
 git clone https://github.com/La-BeTe/drone-dispatch-api.git
 cd drone-dispatch-api
-
-# Install dependencies
 npm install
-
-# Set up environment configuration
 cp .env.example .env
-# Edit .env with your preferred settings
+
+npm run start:dev
 ```
 
-### Running the Development Server
+- API: `http://localhost:3000`
+- Swagger UI: `http://localhost:3000/docs`
+- OpenAPI JSON: `http://localhost:3000/spec`
+- Health check: `http://localhost:3000/health`
+
+To load sample data (10 drones with battery levels from 100% down to 20%, and 4 medications), build first, because the seed script runs from `dist/`:
 
 ```bash
-# Start in development mode (with hot reload)
-npm run start:dev
-
-# Or start in production mode
-npm run start
+npm run build
+npm run seed
 ```
 
-- **API Server**: `http://localhost:3000`
-- **Swagger UI**: `http://localhost:3000/docs`
-- **Health Check**: `http://localhost:3000/health`
+The seed script clears the drone and medication tables before inserting.
 
----
+### Configuration
 
-## 📚 API Endpoints
+| Variable   | Value in `.env.example` | Notes                                                                                          |
+| ---------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `PORT`     | `3000`                  | Falls back to 3000 when unset.                                                                 |
+| `NODE_ENV` | `development`           | Schema sync only runs when this is `development`.                                              |
+| `DB_SYNC`  | `true`                  | Lets TypeORM create the tables on startup. There are no migrations, so a fresh database needs it. |
+| `DB_PATH`  | `./data/db.sqlite`      | SQLite file. When unset, the code defaults to `data/db.sqlite` next to the compiled `app.module`. |
 
-| Method     | Path                  | Description                      | Parameters                                                |
-| ---------- | --------------------- | -------------------------------- | --------------------------------------------------------- |
-| **POST**   | `/drones`             | Register a new drone             | `serialNumber`, `model`, `weightLimit`, `batteryCapacity` |
-| **GET**    | `/drones`             | List drones with pagination      | `state`, `model`, `page`, `limit`                         |
-| **GET**    | `/drones/:id`         | Get drone details                | `id` (path parameter)                                     |
-| **PATCH**  | `/drones/:id`         | Update drone state/battery       | `state`, `batteryCapacity`                                |
-| **POST**   | `/drones/:id/load`    | Load drone with medications      | `medicationCodes`                                         |
-| **GET**    | `/drones/:id/battery` | Get drone battery level          | `id` (path parameter)                                     |
-| **GET**    | `/medications`        | List medications with pagination | `droneId`, `page`, `limit`                                |
-| **POST**   | `/medications`        | Create a medication              | `name`, `weight`, `code`, `image`                         |
-| **GET**    | `/medications/:id`    | Get medication details           | `id` (path parameter)                                     |
-| **PATCH**  | `/medications/:id`    | Update medication details        | `name`, `weight`, `code`, `image`                         |
-| **DELETE** | `/medications/:id`    | Delete a medication              | `id` (path parameter)                                     |
+## API
 
-### Response Format
+All drone and medication IDs are UUIDs.
 
-All API responses follow a consistent structure:
+| Method | Path                 | Description                                 | Input                                                                 |
+| ------ | -------------------- | ------------------------------------------- | --------------------------------------------------------------------- |
+| GET    | `/health`            | Health check                                | none                                                                  |
+| POST   | `/drones`            | Register a drone (starts `idle`)            | body: `serialNumber`, `model`, `weightLimit`, `batteryCapacity`       |
+| GET    | `/drones`            | List drones, paginated                      | query: `state`, `model`, `page`, `limit`                              |
+| GET    | `/drones/:id`        | Get a drone with its loaded medications     | none                                                                  |
+| PATCH  | `/drones/:id`        | Move a drone through delivery, or set battery | body: `state` (`delivering`, `delivered`, `returned`) or `batteryCapacity` |
+| POST   | `/drones/:id/load`   | Load a drone with medications               | body: `medicationCodes` (non-empty array of unique codes)             |
+| POST   | `/medications`       | Create a medication                         | body: `name`, `weight`, `code`, `image` (optional)                    |
+| GET    | `/medications`       | List medications, paginated                 | query: `droneId`, `page`, `limit`                                     |
+| GET    | `/medications/:id`   | Get a medication                            | none                                                                  |
+| PATCH  | `/medications/:id`   | Update a medication                         | body: `name`, `weight`, `code`, `image`                               |
+| DELETE | `/medications/:id`   | Delete a medication                         | none                                                                  |
+
+Details:
+
+- `model` is one of `lightweight`, `middleweight`, `cruiserweight`, `heavyweight`.
+- `weightLimit` is 0 to 500 (grams). `batteryCapacity` is 0 to 100 (percent).
+- The `state` filter on `GET /drones` takes any drone state, plus `available`, which returns `idle` drones with at least 25% battery, that is, drones that can be loaded right now.
+- `limit` is 1 to 100 and defaults to 10; `page` starts at 1.
+- A PATCH to `/drones/:id` that includes `state` ignores `batteryCapacity`.
+- Medication `name` allows letters, digits, `-` and `_`. `code` allows upper-case letters, digits and `_`, and is unique.
+- `GET /medications?droneId=` lists what a drone is currently carrying.
+
+### Response shape
+
+Responses from the controllers are wrapped by a global interceptor:
+
+```json
+{ "success": true, "data": { "id": "…" } }
+```
+
+Paginated lists add `meta`:
 
 ```json
 {
 	"success": true,
-	"data": {
-		/* response data */
-	},
-	"message": "An error occurred" /* in case of an error */
-}
-```
-
-Paginated endpoints include additional metadata:
-
-```json
-{
-	"success": true,
-	"data": [
-		/* items */
-	],
 	"meta": {
 		"page": 1,
 		"limit": 10,
@@ -143,162 +119,46 @@ Paginated endpoints include additional metadata:
 		"totalPages": 3,
 		"hasNextPage": true,
 		"hasPrevPage": false
-	}
+	},
+	"data": []
 }
 ```
 
----
+Errors come back with the HTTP status set and a `message` (a string, or an array of validation messages):
 
-## 🛠️ Available Scripts
-
-| Script               | Description                              |
-| -------------------- | ---------------------------------------- |
-| `npm start`          | Start the application in production mode |
-| `npm run start:dev`  | Start with hot reload for development    |
-| `npm run build`      | Compile TypeScript to JavaScript         |
-| `npm test`           | Run unit tests                           |
-| `npm run test:watch` | Run tests in watch mode                  |
-| `npm run seed`       | Seed database with sample data           |
-
----
-
-## 🗄️ Database Configuration
-
-- **Database**: SQLite via TypeORM
-- **Default Location**: `./data/db.sqlite`
-- **Auto-migration**: Enabled in development (`synchronize: true`)
-- **Production**: Set `synchronize: false` and use migrations
-
-### Database Schema
-
-- **Drones**: Core drone information and states
-- **Medications**: Medication inventory and specifications
-- **Audit Logs**: State changes and battery monitoring
-- **Relationships**: Many-to-many drone-medication associations
-
----
-
-## ⚙️ Configuration
-
-Environment variables can be configured in your `.env` file:
-
-```env
-# Server Configuration
-PORT=3000
-
-# Database Configuration
-DB_PATH=./data/db.sqlite
-DB_SYNC=true
+```json
+{ "success": false, "message": "Battery below 25%" }
 ```
 
-### Environment Variables
+Requests to routes that do not exist get Nest's default 404 body, not this envelope.
 
-| Variable  | Description               | Default            |
-| --------- | ------------------------- | ------------------ |
-| `PORT`    | Server port               | `3000`             |
-| `DB_PATH` | SQLite database path      | `./data/db.sqlite` |
-| `DB_SYNC` | Auto-sync database schema | `true`             |
+## Scripts
 
----
+| Script               | What it does                                 |
+| -------------------- | -------------------------------------------- |
+| `npm run start:dev`  | Start with watch mode                        |
+| `npm start`          | Start once via the Nest CLI                  |
+| `npm run start:prod` | Run the compiled app from `dist/`            |
+| `npm run build`      | Compile to `dist/`                           |
+| `npm run seed`       | Load sample data (run `npm run build` first) |
+| `npm test`           | Unit tests (Jest)                            |
+| `npm run test:cov`   | Unit tests with coverage                     |
+| `npm run lint`       | ESLint with `--fix`                          |
+| `npm run format`     | Prettier                                     |
 
-## 🧪 Testing & Documentation
+Unit tests cover the drone and medication services and controllers with mocked repositories.
 
-### Swagger UI
+## Limitations
 
-Access the interactive API documentation:
+- SQLite with `synchronize` and no migrations. Fine for local use, not for a shared deployment.
+- No authentication or authorisation.
+- Battery level is only what clients report through `PATCH /drones/:id`; nothing drains it during a delivery, and dispatch does not re-check it.
+- The audit log has no read endpoint.
+- The e2e test in `test/` is still the Nest scaffold and does not match the app's routes.
 
-1. Start the development server: `npm run start:dev`
-2. Open your browser to: `http://localhost:3000/docs`
-3. Explore endpoints, test requests, and view schemas
+## Next steps
 
-### Running Tests
-
-```bash
-# Run all tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Run specific test file
-npm test -- medication.service.spec.ts
-```
-
----
-
-## 📏 Code Style & Formatting
-
-- **Prettier**: Code formatting with 4-space tabs
-- **ESLint**: Code quality and consistency
-- **TypeScript**: Strict type checking enabled
-- **NestJS**: Follows NestJS best practices and patterns
-
----
-
-### Drone States
-
-1. **IDLE**: Ready for loading
-2. **LOADING**: Currently being loaded
-3. **LOADED**: Ready for delivery
-4. **DELIVERING**: In transit
-5. **DELIVERED**: Delivery completed
-6. **RETURNING**: Returning to base
-
----
-
-## 🔒 Security & Validation
-
-- **Input Validation**: All endpoints validate input using class-validator
-- **Error Handling**: Comprehensive error responses with proper HTTP status codes
-- **Data Integrity**: Foreign key constraints and relationship management
-- **Audit Trail**: Complete logging of all state changes and operations
-
----
-
-## 🚀 Deployment
-
-### Production Considerations
-
-1. **Database**: Use PostgreSQL or MySQL for production
-2. **Environment**: Set `NODE_ENV=production`
-3. **Synchronize**: Disable auto-sync (`DB_SYNC=false`)
-4. **Logging**: Configure proper logging levels
-5. **Security**: Implement authentication and authorization
-
----
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m 'Add amazing feature'`
-4. Push to the branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
-
-### Development Guidelines
-
-- Follow the existing code style
-- Add tests for new features
-- Update documentation as needed
-- Ensure all tests pass before submitting
-
----
-
-## 📄 License
-
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- Built with [NestJS](https://nestjs.com/)
-- Database management with [TypeORM](https://typeorm.io/)
-- API documentation with [Swagger](https://swagger.io/)
-- Testing with [Jest](https://jestjs.io/)
-
----
-
-### 🚁 Happy Flying!
-
-_Ready to dispatch your first drone? Start with the [Getting Started](#-getting-started) section above!_
+- Make the load and state transitions transactional, so a failed load cannot leave a drone in `loading`.
+- Add migrations and a Postgres configuration.
+- Expose the audit log, filtered by drone and event type.
+- Model battery use per delivery and refuse dispatch below the threshold.
