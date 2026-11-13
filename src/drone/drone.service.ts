@@ -99,9 +99,8 @@ export class DroneService {
 			return this.initiateDelivery(drone);
 		if (updateDto?.state === DroneState.DELIVERED)
 			return this.completeDelivery(drone);
-		if (updateDto?.state === 'returned')
-			return this.recordStateChange(drone, DroneState.IDLE);
-		if (updateDto?.batteryCapacity) {
+		if (updateDto?.state === 'returned') return this.completeReturn(drone);
+		if (typeof updateDto?.batteryCapacity === 'number') {
 			drone.batteryCapacity = updateDto.batteryCapacity;
 			return this.droneRepo.save(drone);
 		}
@@ -144,6 +143,13 @@ export class DroneService {
 		return this.recordStateChange(drone, DroneState.RETURNING);
 	}
 
+	private async completeReturn(drone: Drone): Promise<Drone> {
+		if (drone.state !== DroneState.RETURNING) {
+			throw new BadRequestException(`Drone ${drone.id} is not returning`);
+		}
+		return this.recordStateChange(drone, DroneState.IDLE);
+	}
+
 	async loadDrone(id: string, loadDto: LoadDroneDto): Promise<Drone> {
 		const drone = await this.droneRepo.findOne({
 			where: { id },
@@ -155,8 +161,8 @@ export class DroneService {
 		if (drone.state !== DroneState.IDLE)
 			throw new BadRequestException(`Drone not idle`);
 
-		await this.recordStateChange(drone, DroneState.LOADING);
-
+		// Validate the whole load before touching the drone's state, so a
+		// rejected load leaves it idle instead of stuck in loading.
 		const meds = await this.medService.findByCodes(loadDto.medicationCodes);
 		if (meds.length !== loadDto.medicationCodes.length)
 			throw new NotFoundException('One or more medications not found');
@@ -167,6 +173,7 @@ export class DroneService {
 				`Weight ${totalWeight} exceeds ${drone.weightLimit}`,
 			);
 
+		await this.recordStateChange(drone, DroneState.LOADING);
 		drone.medications = meds;
 		return this.recordStateChange(drone, DroneState.LOADED);
 	}

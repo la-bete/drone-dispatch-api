@@ -212,6 +212,56 @@ describe('DroneService', () => {
 				service.loadDrone('1', { medicationCodes: ['m1', 'm2'] }),
 			).rejects.toThrow(BadRequestException);
 		});
+		it('leaves the drone idle when a medication is not found', async () => {
+			const stored = { ...drone };
+			droneRepo.findOne.mockResolvedValue(stored);
+			medService.findByCodes.mockResolvedValue([meds[0]]);
+			await expect(
+				service.loadDrone('1', { medicationCodes: ['m1', 'm2'] }),
+			).rejects.toThrow(NotFoundException);
+			expect(stored.state).toBe(DroneState.IDLE);
+			expect(droneRepo.save).not.toHaveBeenCalled();
+			expect(auditRepo.save).not.toHaveBeenCalled();
+		});
+		it('leaves the drone idle when the load is overweight', async () => {
+			const stored = { ...drone };
+			droneRepo.findOne.mockResolvedValue(stored);
+			medService.findByCodes.mockResolvedValue([
+				{ id: 'm1', weight: 60 },
+				{ id: 'm2', weight: 60 },
+			]);
+			await expect(
+				service.loadDrone('1', { medicationCodes: ['m1', 'm2'] }),
+			).rejects.toThrow(BadRequestException);
+			expect(stored.state).toBe(DroneState.IDLE);
+			expect(droneRepo.save).not.toHaveBeenCalled();
+			expect(auditRepo.save).not.toHaveBeenCalled();
+		});
+		it('records loading then loaded on a successful load', async () => {
+			const stored = { ...drone };
+			droneRepo.findOne.mockResolvedValue(stored);
+			droneRepo.save.mockImplementation((d: Drone) => Promise.resolve(d));
+			const result = await service.loadDrone('1', {
+				medicationCodes: ['m1', 'm2'],
+			});
+			expect(result.state).toBe(DroneState.LOADED);
+			expect(result.medications).toEqual(meds);
+			expect(auditRepo.save).toHaveBeenNthCalledWith(
+				1,
+				expect.objectContaining({
+					metadata: { from: DroneState.IDLE, to: DroneState.LOADING },
+				}),
+			);
+			expect(auditRepo.save).toHaveBeenNthCalledWith(
+				2,
+				expect.objectContaining({
+					metadata: {
+						from: DroneState.LOADING,
+						to: DroneState.LOADED,
+					},
+				}),
+			);
+		});
 	});
 
 	describe('update', () => {
@@ -251,6 +301,47 @@ describe('DroneService', () => {
 				DroneState.IDLE,
 			);
 			expect(result.state).toBe(DroneState.IDLE);
+		});
+		it('refuses returned unless the drone is returning', async () => {
+			for (const state of [
+				DroneState.IDLE,
+				DroneState.LOADING,
+				DroneState.LOADED,
+				DroneState.DELIVERING,
+			]) {
+				droneRepo.findOne.mockResolvedValue({ id: '1', state });
+				await expect(
+					service.update('1', { state: 'returned' }),
+				).rejects.toThrow(BadRequestException);
+			}
+			expect(droneRepo.save).not.toHaveBeenCalled();
+			expect(auditRepo.save).not.toHaveBeenCalled();
+		});
+		it('records the return to idle from returning', async () => {
+			const drone = { id: '1', state: DroneState.RETURNING };
+			droneRepo.findOne.mockResolvedValue(drone);
+			droneRepo.save.mockImplementation((d: Drone) => Promise.resolve(d));
+			const result = await service.update('1', { state: 'returned' });
+			expect(result.state).toBe(DroneState.IDLE);
+			expect(auditRepo.save).toHaveBeenCalledWith(
+				expect.objectContaining({
+					metadata: {
+						from: DroneState.RETURNING,
+						to: DroneState.IDLE,
+					},
+				}),
+			);
+		});
+		it('sets battery capacity to 0', async () => {
+			const drone = { id: '1', batteryCapacity: 50 };
+			droneRepo.findOne.mockResolvedValue(drone);
+			droneRepo.save.mockImplementation((d: Drone) => Promise.resolve(d));
+			const result = await service.update('1', { batteryCapacity: 0 });
+			expect(droneRepo.save).toHaveBeenCalledWith({
+				id: '1',
+				batteryCapacity: 0,
+			});
+			expect(result.batteryCapacity).toBe(0);
 		});
 		it('updates battery capacity', async () => {
 			const drone = { id: '1', batteryCapacity: 50 };
