@@ -30,7 +30,7 @@ Rules enforced by `DroneService`:
 - **Delivering** is only allowed from `loaded`.
 - **Delivered** is only allowed from `delivering`. The drone's medications are cleared and it moves straight on to `returning` in the same request, so `delivered` shows up in the audit log rather than as a resting state.
 - **Returned** is only allowed from `returning` and puts the drone back to `idle`. `returned` is a request value, not a stored state.
-- Each transition writes a `STATE_CHANGE` row to the audit log with the `from` and `to` states.
+- Each transition writes a `STATE_CHANGE` row to the audit log with `{ from, to }` metadata. Registration is the exception: its row holds only `{ toState: "idle" }`.
 - An hourly cron job (`@nestjs/schedule`) writes a `BATTERY_CHECK` row with the current battery level for every drone.
 
 The audit log is stored in the database only; there is no endpoint for reading it yet.
